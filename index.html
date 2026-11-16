@@ -8,6 +8,8 @@
 <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800&amp;display=swap" rel="stylesheet"/>
 <!-- FontAwesome -->
 <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet"/>
+<!-- ZapUPI Single HTML Web Kit SDK -->
+<script src="https://zapupi.com/single-html-web-kit.js"></script>
 <style>
         :root {
             --bg-color: #030407;
@@ -998,7 +1000,7 @@
     </div>
 </div>
 
-<!-- PAGE: ADD MONEY (ZAP UPI REDIRECT TO EXTERNAL LINK) -->
+<!-- PAGE: ADD MONEY (ZAP UPI SDK INTEGRATION) -->
 <div class="page-content hidden" id="page-add-money">
 <div class="page-header"><h2 class="page-title">Add <span>Funds</span></h2></div>
 <div class="glass payment-settings-card">
@@ -1032,7 +1034,7 @@
     <button class="btn btn-purchase" id="btn-submit-payment" style="width: 100%; height: 52px;"><i class="fas fa-paper-plane"></i> Submit Request</button>
 </div>
 
-<!-- 2. PAYMENT GATEWAY SECTION (ZAP UPI REDIRECT) -->
+<!-- 2. PAYMENT GATEWAY SECTION (ZAP UPI SDK) -->
 <div id="section-gateway-deposit" class="hidden">
     
     <div class="gw-method-grid">
@@ -1042,7 +1044,7 @@
         <button type="button" class="gw-method-btn support-btn" onclick="openPaymentSupport()">PAYMENT ISSUE SUPPORT</button>
     </div>
 
-    <!-- INSTANT UPI DEPOSIT FORM (ZAP UPI) -->
+    <!-- INSTANT UPI DEPOSIT FORM (ZAP UPI SDK) -->
     <div id="gw-sub-upi-box" style="background: rgba(3,4,7,0.65); border: 1px solid rgba(139, 92, 246, 0.35); border-radius: 18px; padding: 24px 18px;">
         <h3 style="color: white; font-size: 18px; font-weight: 800; margin-bottom: 14px;"><i class="fas fa-bolt" style="color: var(--neon-cyan);"></i> Instant UPI Deposit (Zap UPI)</h3>
         
@@ -1354,7 +1356,7 @@
         let selectedDeviceFilter = 'all';
         let proTimerInterval = null;
 
-        const ZAP_API_KEY = "zap94027c1377ffdc1e7fe29424935883c5";
+        const ZAP_API_KEY = "zap27cbbf853d59867336c27140625a4b06";
 
         const loader = document.getElementById('loader');
         const secValidationScreen = document.getElementById('security-validation-screen');
@@ -1478,7 +1480,40 @@
             }
         };
 
-        // ZAP UPI: Direct Redirect to Official Zap UPI Checkout Page
+        // ────────────────────────────────────────────────────────────
+        // ZAP UPI SDK INTEGRATION FOR SINGLE HTML
+        // ────────────────────────────────────────────────────────────
+        ZapUPI.setPaymentCallbacks({
+            onSuccess: async function(orderId) {
+                hideLoader();
+                showToast("Payment Successful! Order: " + orderId, "success");
+                try {
+                    const payRef = push(ref(db, 'payments'));
+                    await set(payRef, {
+                        uid: currentUser.uid,
+                        email: currentUser.email,
+                        amount: parseFloat(window.currentZapAmount || 0),
+                        utr: orderId,
+                        phone: window.currentZapMobile || "",
+                        method: "Zap UPI Gateway",
+                        status: "pending",
+                        timestamp: new Date().toISOString()
+                    });
+                    fetchDepositHistory();
+                } catch(e) {
+                    console.error("Deposit logging error:", e);
+                }
+            },
+            onFailed: function(orderId) {
+                hideLoader();
+                showToast("Payment Failed. Order: " + orderId, "error");
+            },
+            onTimeout: function(orderId) {
+                hideLoader();
+                showToast("Payment Timed Out. Order: " + orderId, "warning");
+            }
+        });
+
         window.initiateZapUpiPayment = async () => {
             if(!currentUser) return showToast("Please login first!", "error");
             
@@ -1488,39 +1523,30 @@
             if(!amount || amount < 1 || amount > 80000) return showToast("Please enter a valid amount between ₹1 and ₹80,000", "error");
             if(!mobile || mobile.length < 10) return showToast("Please enter a valid 10-digit mobile number", "error");
 
+            window.currentZapAmount = amount;
+            window.currentZapMobile = mobile;
+
             showLoader();
 
-            try {
-                const orderId = 'ZAP_' + Date.now();
-
-                // Save pending order info to Firebase
-                const payRef = push(ref(db, 'payments'));
-                await set(payRef, {
-                    uid: currentUser.uid,
-                    email: currentUser.email,
-                    amount: amount,
-                    utr: orderId,
-                    phone: mobile,
-                    method: "Zap UPI Gateway",
-                    status: "pending",
-                    timestamp: new Date().toISOString()
-                });
-
-                hideLoader();
-
-                // Correct Zap UPI Secure Checkout / Payment Page URL
-                const paymentPageUrl = `https://pay.zapupi.com/pay?amount=${amount}&mobile=${mobile}&order_id=${orderId}&key=${ZAP_API_KEY}`;
-                
-                showToast("Redirecting to Zap UPI Secure Pay...", "success");
-                window.location.href = paymentPageUrl;
-
-            } catch(e) {
-                hideLoader();
-                const orderId = 'ZAP_' + Date.now();
-                const fallbackUrl = `https://pay.zapupi.com/pay?amount=${amount}&mobile=${mobile}&order_id=${orderId}&key=${ZAP_API_KEY}`;
-                showToast("Redirecting to payment gateway...", "success");
-                window.location.href = fallbackUrl;
-            }
+            ZapUPI.createOrder(
+                {
+                    zap_key: ZAP_API_KEY,
+                    order_id: "ORD" + Date.now(),
+                    amount: amount.toString(),
+                    customer_mobile: mobile,
+                    remark: "Wallet Deposit | " + currentUser.uid
+                },
+                {
+                    onResponse: function(paymentUrl, orderId, data) {
+                        hideLoader();
+                        ZapUPI.loadPayment(paymentUrl);
+                    },
+                    onError: function(err) {
+                        hideLoader();
+                        showToast("Order Error: " + err, "error");
+                    }
+                }
+            );
         };
 
         window.openGatewayFromCheckout = () => {
@@ -3236,7 +3262,7 @@
                                     <h4>${p.panelName}</h4>
                                     <p><i class="fas fa-tag"></i> ${displayLabel} | Qty: ${p.quantity || 1} | ${dateStr}</p>
                                     <div style="margin-top:6px;">${expiryBadge}</div>
-                                }
+                                </div>
                                 <div class="hist-price">₹${parseFloat(p.price || 0).toFixed(2)}</div>
                             </div>
                             
@@ -3286,23 +3312,18 @@
                     return;
                 }
 
-                if(data.name) {
+                (data.name) ? (() => {
                     let fullText = String(data.name).trim();
                     let parts = fullText.split(' ');
                     if(parts.length > 1) {
-                        let firstWord = parts[0];
-                        let restWords = parts.slice(1).join(' ');
-                        nameLine1.innerText = firstWord;
-                        nameLine2.innerText = restWords;
+                        nameLine1.innerText = parts[0];
+                        nameLine2.innerText = parts.slice(1).join(' ');
                     } else {
                         nameLine1.innerText = fullText;
                         nameLine2.innerText = "";
                     }
                     document.title = fullText + " | PREMIUM";
-                } else {
-                    nameLine1.innerText = "RESELLER";
-                    nameLine2.innerText = "STORE";
-                }
+                })() : null;
 
                 if(data.logo && data.logo.length > 5){
                     logoEl.src = data.logo;
